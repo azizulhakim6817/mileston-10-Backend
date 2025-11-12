@@ -1,6 +1,7 @@
 const express = require("express");
 require("dotenv").config();
 const cors = require("cors");
+const admin = require("firebase-admin");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const port = process.env.PORT || 3000;
@@ -9,6 +10,42 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+//middlware ---------------------------------------
+const logger = (req, res, next) => {
+  console.log("logging info");
+  next();
+};
+
+// firebase admin -----------------
+const serviceAccount = require("./smart-deals-firebase-admin.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+//firebase medilware ------------------------------------
+const verifyFireBaseToken = async (req, res, next) => {
+  //console.log("In the verify middleware", req.headers.authrization);
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: "Unauthrize access!" });
+  }
+
+  const token = req.headers.authorization.split(` `)[1];
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access!-" });
+  }
+  //admin ---------------
+  try {
+    const userTokenInfo = await admin.auth().verifyIdToken(token);
+    req.token_email = userTokenInfo.email;
+    console.log("After token validation", userTokenInfo);
+    next();
+  } catch (error) {
+    return res.status(401).send({ message: "Unauthorized access!" });
+  }
+
+  //verify token ------------------
+};
 
 //! Database -----------------------------------
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.aramfem.mongodb.net/smart-server-db`;
@@ -126,10 +163,14 @@ async function run() {
     });
 
     //!! bids get------------------------------------
-    app.get("/bids", async (req, res) => {
+    app.get("/bids", logger, verifyFireBaseToken, async (req, res) => {
+      //console.log(req.headers);
       const email = req.query.email;
       const query = {};
       if (email) {
+        if (email !== req.token_email) {
+          return res.status(403).send({ message: "forbiden access" });
+        }
         query.buyer_email = email;
       }
       const cursor = bidsCollection.find(query);
@@ -145,13 +186,17 @@ async function run() {
     });
 
     //! product bids------------------------------------------
-    app.get("/product/bids/:productId", async (req, res) => {
-      const productId = req.params.productId;
-      const query = { product: productId };
-      const cursor = bidsCollection.find(query).sort({ bid_price: 1 });
-      const result = await cursor.toArray();
-      res.send(result);
-    });
+    app.get(
+      "/product/bids/:productId",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const productId = req.params.productId;
+        const query = { product: productId };
+        const cursor = bidsCollection.find(query).sort({ bid_price: 1 });
+        const result = await cursor.toArray();
+        res.send(result);
+      }
+    );
 
     //! bids delete --------------------------------------------
     app.delete("/bids-delete/:id", async (req, res) => {
